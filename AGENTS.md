@@ -7,7 +7,7 @@
 - 不要用 `$input`、`$host`、`$args` 这类 PowerShell 自动变量名。
 - 要存进字典或列表的值不要用 `$( )` 包：它会把单元素数组拆成标量。序列化统一走 `ConvertTo-JsonText`，它会拆掉 PowerShell 的 PSObject 包装（`-is [psobject]` 对任何对象都为真，不能用来判断）。
 - Slack 的读取类方法（`chat.getPermalink`、`conversations.*`）不接受 JSON 请求体，加进 `lib\slack.ps1` 的 `$FormMethods`。
-- 提交前检查：所有 `.ps1` 能被 `[Management.Automation.Language.Parser]::ParseFile` 解析且没有错误。
+- 提交前跑 `tools\check.ps1`（解析所有 `.ps1`、检查 BOM），CI 跑的是同一个脚本。
 - 测试打字时用临时测试会话，不用正在干活的会话。token、`.env`、运行数据不进仓库。
 - PowerShell 变量名不分大小写：$json 会覆盖公共库的 $Json，别用和库里变量同名的名字。
 - 读磁盘上的事件、待答文件时要校验必需字段，坏文件跳过，不能让主循环每轮出错。

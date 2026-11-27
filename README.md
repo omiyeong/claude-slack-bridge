@@ -1,8 +1,17 @@
 # claude-slack-bridge
 
-把 Claude 桌面应用（Code 标签页）里的会话接到 Slack 私信：会话停下、要你选择或授权时发到 Slack，你在 Slack thread 里回复，文字会打回电脑上同一个会话。
+[![check](https://github.com/omiyeong/claude-slack-bridge/actions/workflows/check.yml/badge.svg)](https://github.com/omiyeong/claude-slack-bridge/actions/workflows/check.yml)
+[![license](https://img.shields.io/github/license/omiyeong/claude-slack-bridge)](LICENSE)
+![platform](https://img.shields.io/badge/platform-Windows-0078d4)
+![powershell](https://img.shields.io/badge/PowerShell-5.1-5391fe)
+
+中文 | [English](README.en.md)
+
+把 Claude 桌面应用（Code 标签页）里的会话接到 Slack 私信：会话停下、要你选择或授权时发到 Slack，你在 Slack thread 里回复，文字会打回电脑上同一个会话。人离开电脑，活不停。
 
 只支持 Windows，全部用系统自带的 PowerShell 5.1 和 .NET Framework，不装任何依赖。
+
+> 这是个人项目，不是 Anthropic 或 Slack 的官方产品。
 
 ## 能做什么
 
@@ -38,6 +47,13 @@ Claude 桌面应用 ──hook──▶ spool 目录 ──▶ listener（常驻
 | `commands\slack.md` | `/slack` 命令定义，由 `install.ps1` 装到 `~/.claude/commands` |
 | `manifest.yml` | Slack 应用清单 |
 | `install.ps1` | 注册计划任务、安装 `/slack`、打印 hooks 配置 |
+| `tools\check.ps1` | 提交前检查：脚本能解析、带 BOM，CI 也跑它 |
+
+## 环境要求
+
+- Windows 10 1809 及以上或 Windows 11（自带 PowerShell 5.1 和无头 `conhost`）
+- Claude 桌面应用，会话在 Code 标签页里跑
+- 一个能自己建应用的 Slack 工作区（免费版就行）
 
 ## 安装
 
@@ -84,6 +100,29 @@ Start-ScheduledTask claude-slack-bridge
 
 不要直接在终端里跑 `listener.ps1` 常驻：默认终端是 Windows Terminal 时它是个可见窗口，关掉就停了。
 
+## 排查
+
+| 现象 | 看哪里 |
+|---|---|
+| Slack 什么都收不到 | `listener.log` 最后有没有“Socket Mode 已连接”；`spool` 目录里堆着事件说明 listener 没在跑 |
+| `/slack` 被当成普通消息发给了 Claude | `settings.json` 里没有 `UserPromptSubmit` hook，或 hook 里 `hook.ps1` 的路径不对 |
+| 回复显示 ⚠️ 没送达 | thread 里的说明；多半是会话有弹窗没处理，或桌面应用没开 |
+| hook 报错 | `hook.log` |
+
+日志都在 `%USERPROFILE%\.claude-slack-bridge\logs\`。
+
+## 卸载
+
+```powershell
+Unregister-ScheduledTask claude-slack-bridge -Confirm:$false
+```
+
+```powershell
+Remove-Item "$env:USERPROFILE\.claude\commands\slack.md"
+```
+
+再从 `~/.claude/settings.json` 删掉指向 `hook.ps1` 的四个 hook。运行数据在 `%USERPROFILE%\.claude-slack-bridge\`，不要了就整个删掉。
+
 ## 已知限制
 
 - 只处理桌面应用里的会话；终端里的 `claude` 会话不会发。
@@ -92,6 +131,10 @@ Start-ScheduledTask claude-slack-bridge
 - `/slack` 开始的跟随目前没有关闭的办法。
 - 打字靠切窗口和剪贴板：打字那一刻桌面应用会被切到前台，剪贴板会被临时占用后还原。
 
+## 参与
+
+欢迎 issue 和 PR，先看 [CONTRIBUTING.md](CONTRIBUTING.md)。安全问题请按 [SECURITY.md](SECURITY.md) 私下报告。版本变化见 [CHANGELOG.md](CHANGELOG.md)。
+
 ## License
 
-MIT
+[MIT](LICENSE)
