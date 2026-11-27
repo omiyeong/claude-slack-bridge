@@ -6,8 +6,10 @@ $root = $PSScriptRoot
 $hook = ($root -replace '\\', '/') + '/hook.ps1'
 
 if ($RegisterTask) {
-    $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
-        -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}"' -f (Join-Path $root 'run-listener.ps1'))
+    # 默认终端是 Windows Terminal 时，直接启动 powershell 会被它接管成可见窗口（-WindowStyle Hidden 无效），
+    # 关掉窗口监听就停了。用无头 conhost 托管，不创建任何窗口
+    $action = New-ScheduledTaskAction -Execute 'conhost.exe' `
+        -Argument ('--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{0}"' -f (Join-Path $root 'run-listener.ps1'))
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
     # Interactive：只在你登录时运行，这样才能操作桌面应用窗口和剪贴板
     $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
