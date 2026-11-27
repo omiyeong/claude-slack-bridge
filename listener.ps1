@@ -129,6 +129,11 @@ function Get-AskBlocks($P) {
             }
             $blocks += @{ type = 'actions'; elements = $btns }
         }
+        # 对应电脑弹窗里的 Other：自己写答案，回车即发送
+        $custom = if ($P.custom.ContainsKey($i)) { "（已填：$($P.custom[$i])）" } else { '' }
+        $blocks += @{ type = 'input'; dispatch_action = $true; optional = $true; block_id = "txtb|$id|$i"
+            label = @{ type = 'plain_text'; text = "其他$custom" }
+            element = @{ type = 'plain_text_input'; action_id = "txt|$id|$i"; placeholder = @{ type = 'plain_text'; text = '都不合适就直接写，回车发送' } } }
     }
     $single = ($qs.Count -eq 1 -and -not [bool](Get-Dict $qs[0] 'multiSelect' $false))
     if (-not $single) {
@@ -161,7 +166,7 @@ function Sync-PendingFiles {
         $id = $f.BaseName
         if ($script:Pending.ContainsKey($id) -or (Test-Path (Join-Path $script:PendingDir "$id.closed"))) { continue }
         try { $req = ConvertFrom-JsonDict (Read-TextFile $f.FullName) } catch { continue }
-        $script:Pending[$id] = @{ req = $req; ts = $null; sel = @{}; host = (Get-Dict $req 'host_id') }
+        $script:Pending[$id] = @{ req = $req; ts = $null; sel = @{}; custom = @{}; host = (Get-Dict $req 'host_id') }
         Write-Log 'listener' "待答问题 $id（$(Get-Dict $req 'kind')）"
     }
 }
@@ -218,8 +223,16 @@ function Invoke-BlockAction($Payload) {
             Set-SessionStatus $s 'running'
         }
         'chk' { }   # 复选框的勾选状态在提交时从 payload.state 里读
+        'txt' {
+            $i = [int]$parts[2]
+            $val = ([string](Get-Dict $action 'value' '')).Trim()
+            if ($val) { $p.custom[$i] = $val; $p.sel.Remove($i) } else { $p.custom.Remove($i) }
+            if (@($p.req.questions).Count -eq 1) { Submit-Ask $p $Payload }
+            else { Invoke-SlackApi 'chat.update' @{ channel = $script:State.dm; ts = $p.ts; text = '等你选择'; blocks = (Get-AskBlocks $p) } | Out-Null }
+        }
         'sel' {
             $p.sel[[int]$parts[2]] = [int]$parts[3]
+            $p.custom.Remove([int]$parts[2])
             if (@($p.req.questions).Count -eq 1) { Submit-Ask $p $Payload }
             else { Invoke-SlackApi 'chat.update' @{ channel = $script:State.dm; ts = $p.ts; text = '等你选择'; blocks = (Get-AskBlocks $p) } | Out-Null }
         }
@@ -233,13 +246,20 @@ function Submit-Ask($P, $Payload) {
     $answers = @{}; $missing = @()
     for ($i = 0; $i -lt $qs.Count; $i++) {
         $q = $qs[$i]; $opts = @($q.options)
+        # 输入框里写了但没按回车，提交时也算
+        $typed = ''
+        foreach ($blk in $values.Values) { $el = Get-Dict $blk "txt|$($P.req.id)|$i"; if ($el) { $typed = ([string](Get-Dict $el 'value' '')).Trim() } }
+        if ($typed) { $P.custom[$i] = $typed }
         if ([bool](Get-Dict $q 'multiSelect' $false)) {
             $picked = @()
             foreach ($blk in $values.Values) {
                 $el = Get-Dict $blk "chk|$($P.req.id)|$i"
                 foreach ($o in @(Get-Dict $el 'selected_options' @())) { $picked += [string]$opts[[int]$o.value].label }
             }
+            if ($P.custom.ContainsKey($i)) { $picked += $P.custom[$i] }
             if ($picked.Count) { $answers[[string]$q.question] = $picked -join ', ' } else { $missing += $i + 1 }
+        } elseif ($P.custom.ContainsKey($i)) {
+            $answers[[string]$q.question] = $P.custom[$i]
         } elseif ($P.sel.ContainsKey($i)) {
             $answers[[string]$q.question] = [string]$opts[$P.sel[$i]].label
         } else { $missing += $i + 1 }
