@@ -26,7 +26,7 @@ function Save-State { Write-TextFileAtomic $script:StateFile (ConvertTo-JsonText
 
 $script:State = Read-State
 $script:Pending = @{}          # request_id -> @{ req; ts; sel; host }
-$script:InjectQueue = New-Object System.Collections.Queue
+$script:InjectQueue = New-Object 'System.Collections.Generic.List[object]'
 $script:InjectJob = $null      # 正在打字的子进程
 $script:Verifying = @()        # 打完字等 transcript 确认的回复
 $script:SeenEvents = New-Object System.Collections.Generic.List[string]
@@ -203,11 +203,32 @@ function Sync-PendingFiles {
         $id = $f.BaseName
         if ($script:Pending.ContainsKey($id) -or (Test-Path (Join-Path $script:PendingDir "$id.closed"))) { continue }
         try { $req = ConvertFrom-JsonDict (Read-TextFile $f.FullName) } catch { continue }
+        # 空文件或缺字段的待答文件不能进队列，否则主循环每一轮都出错
+        if (-not (Get-Dict $req 'host_id') -or -not (Get-Dict $req 'kind')) { continue }
         $posted = Join-Path $script:PendingDir "$id.posted"
         $ts = if (Test-Path $posted) { (Read-TextFile $posted).Trim() } else { $null }
         $script:Pending[$id] = @{ req = $req; ts = $ts; sel = @{}; custom = @{}; checks = @{}; rev = @{}; host = (Get-Dict $req 'host_id') }
         Write-Log 'listener' "待答问题 $id（$(Get-Dict $req 'kind')）"
     }
+}
+
+function Test-StaleDialog($S) {
+    # 超时后桌面弹窗还开着；会话记录在那之后出现用户侧记录（作答结果或新消息）就说明已处理
+    $at = Get-Dict $S 'blocked_at'
+    if ($null -eq $at -or [long]$at -lt 0) { return $false }
+    $tr = [string](Get-Dict $S 'transcript' '')
+    if (-not $tr -or -not (Test-Path -LiteralPath $tr)) { return $false }
+    $len = (Get-Item -LiteralPath $tr).Length
+    if ($len -gt [long]$at) {
+        foreach ($line in (Get-TranscriptLines $tr ($len - [long]$at + 1))) {
+            if ($line.Contains('"type":"user"')) { $S.Remove('blocked_at') | Out-Null; Save-State; return $false }
+        }
+    }
+    return $true
+}
+
+function Test-CannotType([string]$HostId) {
+    return (Test-OpenQuestion $HostId) -or (Test-StaleDialog $script:State.sessions[$HostId])
 }
 
 function Update-Pending {
@@ -221,7 +242,11 @@ function Update-Pending {
             switch ($closed) {
                 'answered' { }   # 点击时已经写好“已选择 / 已拒绝”，不要覆盖
                 'terminal' { Close-PendingMessage $p '已在电脑上处理'; if ($p.ts) { Set-SessionStatus $s 'handled' } }
-                default { Close-PendingMessage $p '已超时，回到电脑上的弹窗处理' }
+                default {
+                    Close-PendingMessage $p '已超时，回到电脑上的弹窗处理'
+                    # 弹窗还开着：处理完之前不能往这个会话打字
+                    if ($s) { $s['blocked_at'] = [long](Get-Dict $p.req 'offset' -1); Save-State }
+                }
             }
             foreach ($suffix in @('json', 'answer', 'closed', 'posted')) { Remove-Item "$base.$suffix" -Force -ErrorAction SilentlyContinue }
             $script:Pending.Remove($id)
@@ -356,14 +381,12 @@ function Invoke-MessageEvent($Ev) {
     }
     $found = Get-SessionByThread $threadTs
     if (-not $found -or -not $text) { return }
-    foreach ($p in $script:Pending.Values) {
-        if ($p.host -eq $found.host -and $p.ts) {
-            Invoke-SlackApi 'chat.postMessage' @{ channel = $script:State.dm; thread_ts = $threadTs; text = '这个会话正在等你点上面的按钮，处理完再回复。' } | Out-Null
-            return
-        }
+    if (Test-CannotType $found.host) {
+        Invoke-SlackApi 'chat.postMessage' @{ channel = $script:State.dm; thread_ts = $threadTs; text = '这个会话有没处理的弹窗，现在打字会打进弹窗。请先点上面的按钮，或到电脑上处理。' } | Out-Null
+        return
     }
     Set-SlackReaction $script:State.dm $Ev.ts 'eyes'
-    $script:InjectQueue.Enqueue(@{ host = $found.host; text = $text; ts = $Ev.ts; thread = $threadTs })
+    $script:InjectQueue.Add(@{ host = $found.host; text = $text; ts = $Ev.ts; thread = $threadTs })
 }
 
 function Send-SessionList {
@@ -429,7 +452,10 @@ function Update-Injection {
     if ($script:InjectQueue.Count -eq 0) { return }
     # 有人在用电脑就先等，不和人抢键盘
     if ((Get-IdleSeconds) -lt $InjectIdle) { return }
-    $item = $script:InjectQueue.Dequeue()
+    $item = $null
+    foreach ($candidate in $script:InjectQueue) { if (-not (Test-CannotType $candidate.host)) { $item = $candidate; break } }
+    if (-not $item) { return }
+    $script:InjectQueue.Remove($item) | Out-Null
     $s = $script:State.sessions[$item.host]
     $tr = Get-Dict $s 'transcript'
     $item.since = if ($tr -and (Test-Path -LiteralPath $tr)) { (Get-Item -LiteralPath $tr).Length } else { 0 }

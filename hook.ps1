@@ -86,11 +86,12 @@ function Invoke-Permission($Hook) {
         $req.detail = ([string]$detail).Substring(0, [Math]::Min(800, ([string]$detail).Length))
     }
     $base = Join-Path $script:PendingDir $id
+    $offset = if ($ev.transcript -and (Test-Path -LiteralPath $ev.transcript)) { (Get-Item -LiteralPath $ev.transcript).Length } else { -1 }
+    $req.offset = $offset
     Write-TextFileAtomic "$base.json" (ConvertTo-JsonText $req)
     $ev.kind = $req.kind; $ev.request_id = $id
     New-SpoolEvent $ev
 
-    $offset = if ($ev.transcript -and (Test-Path -LiteralPath $ev.transcript)) { (Get-Item -LiteralPath $ev.transcript).Length } else { -1 }
     $deadline = (Get-Date).AddSeconds($WaitSeconds)
     $closed = 'timeout'
     $tick = 0
