@@ -8,7 +8,8 @@ $script:Cfg = Read-BridgeEnv
 $Owner = $Cfg.OWNER_USER_ID
 $AwayAfter = [int]$Cfg.AWAY_AFTER_SECONDS
 $InjectIdle = [int]$Cfg.INJECT_IDLE_SECONDS
-$VerifySeconds = 15
+$VerifySeconds = 15            # 超过它还没看到，多半是会话在跑、消息在桌面应用里排队
+$QueuedGiveUpSeconds = 1800    # 排队的消息要到这一轮结束才写进会话记录
 
 $StatusEmoji = @{ running = 'arrow_forward'; stop = 'large_green_circle'; ask = 'large_blue_circle'; perm = 'large_orange_circle'; notify = 'large_yellow_circle'; handled = 'white_circle' }
 $StatusText = @{ running = '已收到回复，进行中'; stop = '已停下'; ask = '等你选择'; perm = '等你授权'; notify = '等你输入'; handled = '已在电脑上处理' }
@@ -332,6 +333,13 @@ function Submit-Ask($P, $Payload) {
 # ---------- 回复打回会话 ----------
 
 function ConvertFrom-SlackText([string]$Text) {
+    # Slack 把链接包成 <url> 或 <url|显示文字>；正文里真正的尖括号是 &lt; &gt;，不会被误伤
+    $Text = [regex]::Replace($Text, '<((?:https?|mailto|tel):[^|>]+)(?:\|([^>]*))?>', {
+            param($m)
+            $url = $m.Groups[1].Value -replace '^(mailto|tel):', ''
+            $label = $m.Groups[2].Value
+            if (-not $label -or $url.Contains($label)) { $url } else { "$label ($url)" }
+        })
     return $Text.Replace('&lt;', '<').Replace('&gt;', '>').Replace('&amp;', '&')
 }
 
@@ -376,6 +384,7 @@ function Send-SessionList {
 
 function Complete-Reply($Item, [bool]$Ok, [string]$Reason) {
     Set-SlackReaction $script:State.dm $Item.ts 'eyes' -Remove
+    if ($Item.ContainsKey('waiting') -and $Item.waiting) { Set-SlackReaction $script:State.dm $Item.ts 'hourglass_flowing_sand' -Remove }
     if ($Ok) {
         Set-SlackReaction $script:State.dm $Item.ts 'white_check_mark'
         Set-SessionStatus $script:State.sessions[$Item.host] 'running'
@@ -393,9 +402,13 @@ function Update-Injection {
         if (Test-UserMessageArrived (Get-Dict $s 'transcript') $v.text $v.since) {
             Complete-Reply $v $true ''
             $script:Verifying = @($script:Verifying | Where-Object { $_ -ne $v })
-        } elseif ((Get-Date) -gt $v.deadline) {
-            Complete-Reply $v $false "已打进输入框，但 $VerifySeconds 秒内没在会话记录里看到这条消息"
+        } elseif ((Get-Date) -gt $v.giveUp) {
+            Complete-Reply $v $false "已打进输入框，但 $([int]($QueuedGiveUpSeconds / 60)) 分钟内会话记录里一直没有这条消息。请到电脑上看一下，不要直接重发"
             $script:Verifying = @($script:Verifying | Where-Object { $_ -ne $v })
+        } elseif (-not $v.waiting -and (Get-Date) -gt $v.deadline) {
+            $v.waiting = $true
+            Set-SlackReaction $script:State.dm $v.ts 'hourglass_flowing_sand'
+            Write-Log 'listener' "回复 $($v.host) 已打字，等会话处理"
         }
     }
     # 正在打字的子进程
@@ -407,6 +420,8 @@ function Update-Injection {
         $script:InjectJob = $null
         if ($result -eq 'ok') {
             $j.item.deadline = (Get-Date).AddSeconds($VerifySeconds)
+            $j.item.giveUp = (Get-Date).AddSeconds($QueuedGiveUpSeconds)
+            $j.item.waiting = $false
             $script:Verifying += $j.item
         } else { Complete-Reply $j.item $false ($result -replace '^error:', '') }
         return
