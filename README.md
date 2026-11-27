@@ -11,6 +11,7 @@
 | `run-listener.ps1` | 计划任务入口，监听程序退出后自动重启 |
 | `lib\inject.ps1` | 打开指定会话、粘贴、回车 |
 | `manifest.yml` | Slack 应用清单 |
+| `commands\slack.md` | `/slack` 命令，由 `install.ps1` 装到 `~/.claude/commands` |
 | `install.ps1` | 注册计划任务，打印 hooks 配置 |
 
 ## 安装
@@ -24,7 +25,12 @@
 powershell -NoProfile -STA -ExecutionPolicy Bypass -File D:\liuxin\code\claude-slack-bridge\listener.ps1
 ```
 
-5. `install.ps1 -RegisterTask` 注册登录时自启；把它打印的 hooks 片段合并进 `~/.claude/settings.json`。
+5. `install.ps1 -RegisterTask` 注册登录时自启并安装 `/slack` 命令；把它打印的 hooks 片段合并进 `~/.claude/settings.json`。
+
+## 使用
+
+- 人离开电脑超过 `AWAY_AFTER_SECONDS`（默认 5 分钟）后，会话停下、选择题、授权会发到 Slack。
+- 在会话里输入 `/slack`：新开一个 thread，发最近 5 条消息；之后这个会话不管你在不在电脑前，停下都会发过去。thread 标题是 `项目.会话名`，没选文件夹的会话只显示会话名。
 
 运行数据（状态、spool、日志）在 `%USERPROFILE%\.claude-slack-bridge\`，不进仓库。
 
@@ -33,3 +39,4 @@ powershell -NoProfile -STA -ExecutionPolicy Bypass -File D:\liuxin\code\claude-s
 - 选择题和授权的按钮只等 9 分钟，超时后只能到电脑上处理；处理前该会话的 Slack 回复不会发送。
 - Slack 输入框会把直引号改成弯引号。要原样发命令时用反引号包起来。
 - 会话在跑时回复会先排队，消息上显示 ⏳，会话处理到后变 ✅。
+- `/slack` 开始的跟随目前没有关闭的办法，会一直持续。
