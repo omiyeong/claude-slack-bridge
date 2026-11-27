@@ -27,3 +27,9 @@ powershell -NoProfile -STA -ExecutionPolicy Bypass -File D:\liuxin\code\claude-s
 5. `install.ps1 -RegisterTask` 注册登录时自启；把它打印的 hooks 片段合并进 `~/.claude/settings.json`。
 
 运行数据（状态、spool、日志）在 `%USERPROFILE%\.claude-slack-bridge\`，不进仓库。
+
+## 已知限制
+
+- 选择题和授权的按钮只等 9 分钟，超时后只能到电脑上处理；处理前该会话的 Slack 回复不会发送。
+- Slack 输入框会把直引号改成弯引号。要原样发命令时用反引号包起来。
+- 会话在跑时回复会先排队，消息上显示 ⏳，会话处理到后变 ✅。

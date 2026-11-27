@@ -11,8 +11,8 @@ $InjectIdle = [int]$Cfg.INJECT_IDLE_SECONDS
 $VerifySeconds = 15            # 超过它还没看到，多半是会话在跑、消息在桌面应用里排队
 $QueuedGiveUpSeconds = 1800    # 排队的消息要到这一轮结束才写进会话记录
 
-$StatusEmoji = @{ running = 'arrow_forward'; stop = 'large_green_circle'; ask = 'large_blue_circle'; perm = 'large_orange_circle'; notify = 'large_yellow_circle'; handled = 'white_circle' }
-$StatusText = @{ running = '已收到回复，进行中'; stop = '已停下'; ask = '等你选择'; perm = '等你授权'; notify = '等你输入'; handled = '已在电脑上处理' }
+$StatusEmoji = @{ running = 'arrow_forward'; stop = 'large_green_circle'; ask = 'large_blue_circle'; perm = 'large_orange_circle'; notify = 'large_yellow_circle'; handled = 'white_circle'; timeout = 'red_circle' }
+$StatusText = @{ running = '已收到回复，进行中'; stop = '已停下'; ask = '等你选择'; perm = '等你授权'; notify = '等你输入'; handled = '已在电脑上处理'; timeout = '超时，请到电脑上处理' }
 
 # ---------- 状态 ----------
 
@@ -245,7 +245,10 @@ function Update-Pending {
                 default {
                     Close-PendingMessage $p '已超时，回到电脑上的弹窗处理'
                     # 弹窗还开着：处理完之前不能往这个会话打字
-                    if ($s) { $s['blocked_at'] = [long](Get-Dict $p.req 'offset' -1); Save-State }
+                    if ($s) {
+                        $s['blocked_at'] = [long](Get-Dict $p.req 'offset' -1); Save-State
+                        if ($p.ts) { Set-SessionStatus $s 'timeout' }
+                    }
                 }
             }
             foreach ($suffix in @('json', 'answer', 'closed', 'posted')) { Remove-Item "$base.$suffix" -Force -ErrorAction SilentlyContinue }
@@ -382,7 +385,8 @@ function Invoke-MessageEvent($Ev) {
     $found = Get-SessionByThread $threadTs
     if (-not $found -or -not $text) { return }
     if (Test-CannotType $found.host) {
-        Invoke-SlackApi 'chat.postMessage' @{ channel = $script:State.dm; thread_ts = $threadTs; text = '这个会话有没处理的弹窗，现在打字会打进弹窗。请先点上面的按钮，或到电脑上处理。' } | Out-Null
+        $hint = if (Test-OpenQuestion $found.host) { '请先点上面的按钮，或到电脑上处理。' } else { '按钮已超时，请到电脑上处理。' }
+        Invoke-SlackApi 'chat.postMessage' @{ channel = $script:State.dm; thread_ts = $threadTs; text = "没发送：这个会话有没处理的弹窗，现在打字会打进弹窗。$hint" } | Out-Null
         return
     }
     Set-SlackReaction $script:State.dm $Ev.ts 'eyes'
@@ -394,7 +398,7 @@ function Send-SessionList {
     foreach ($kv in $script:State.sessions.GetEnumerator()) {
         $s = $kv.Value
         $st = Get-Dict $s 'status'
-        if ($st -notin 'stop', 'ask', 'perm', 'notify' -or -not (Get-Dict $s 'thread_ts')) { continue }
+        if ($st -notin 'stop', 'ask', 'perm', 'notify', 'timeout' -or -not (Get-Dict $s 'thread_ts')) { continue }
         # 会话删掉后 transcript 也会删掉，不再列出
         $transcript = [string](Get-Dict $s 'transcript' '')
         if (-not $transcript -or -not (Test-Path -LiteralPath $transcript)) { continue }
