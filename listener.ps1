@@ -181,7 +181,7 @@ function Get-AskBlocks($P) {
 function Get-PermBlocks($P) {
     $req = $P.req
     return @(
-        @{ type = 'section'; text = @{ type = 'mrkdwn'; text = "*工具*：$($req.tool)`n``````$($req.detail)``````" } },
+        @{ type = 'section'; text = @{ type = 'mrkdwn'; text = "*工具* $($req.tool)`n``````$($req.detail)``````" } },
         @{ type = 'actions'; elements = @(
                 @{ type = 'button'; action_id = "perm|$($req.id)|allow"; style = 'primary'; text = @{ type = 'plain_text'; text = '允许' } },
                 @{ type = 'button'; action_id = "perm|$($req.id)|deny"; style = 'danger'; text = @{ type = 'plain_text'; text = '拒绝' } }) }
@@ -364,11 +364,14 @@ function Send-SessionList {
         $s = $kv.Value
         $st = Get-Dict $s 'status'
         if ($st -notin 'stop', 'ask', 'perm', 'notify' -or -not (Get-Dict $s 'thread_ts')) { continue }
+        # 会话删掉后 transcript 也会删掉，不再列出
+        $transcript = [string](Get-Dict $s 'transcript' '')
+        if (-not $transcript -or -not (Test-Path -LiteralPath $transcript)) { continue }
         $link = Get-Dict (Invoke-SlackApi 'chat.getPermalink' @{ channel = $script:State.dm; message_ts = $s.thread_ts }) 'permalink'
         $lines += "• <$link|$(Get-Project (Get-Dict $s 'cwd')) · $(Get-Dict $s 'title' '')>  $($StatusText[$st])"
     }
     $text = if ($lines.Count) { $lines -join "`n" } else { '没有在等你的会话' }
-    Invoke-SlackApi 'chat.postMessage' @{ channel = $script:State.dm; text = $text } | Out-Null
+    Invoke-SlackApi 'chat.postMessage' @{ channel = $script:State.dm; text = $text; unfurl_links = $false; unfurl_media = $false } | Out-Null
 }
 
 function Complete-Reply($Item, [bool]$Ok, [string]$Reason) {
