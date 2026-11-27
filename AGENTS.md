@@ -12,3 +12,4 @@
 - PowerShell 变量名不分大小写：$json 会覆盖公共库的 $Json，别用和库里变量同名的名字。
 - 读磁盘上的事件、待答文件时要校验必需字段，坏文件跳过，不能让主循环每轮出错。
 - 往会话打字前必须确认它没有开着的弹窗（Test-CannotType），否则文字会打进弹窗。
+- 监听程序只通过计划任务 `claude-slack-bridge` 运行（`conhost.exe --headless` 托管，没有窗口）。默认终端是 Windows Terminal 时直接起 powershell 会变成可见窗口，`-WindowStyle Hidden` 无效，关窗口就停了。改完代码重启：结束 `run-listener.ps1` 和 `listener.ps1` 两个进程，再 `Start-ScheduledTask claude-slack-bridge`，最后看 `listener.log` 有没有“Socket Mode 已连接”。
