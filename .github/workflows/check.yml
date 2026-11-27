@@ -1,0 +1,16 @@
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      # 用 Windows PowerShell 5.1，和实际运行环境一致
+      - name: Parse and encoding check
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tools\check.ps1
