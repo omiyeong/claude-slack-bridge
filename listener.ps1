@@ -36,7 +36,7 @@ function Get-Project([string]$Cwd) { if ($Cwd) { return Split-Path $Cwd -Leaf } 
 
 function Get-SessionByThread([string]$ThreadTs) {
     foreach ($kv in $script:State.sessions.GetEnumerator()) {
-        if ((Get-Dict $kv.Value 'thread_ts') -eq $ThreadTs) { return @{ host = $kv.Key; s = $kv.Value } }
+        if ((Get-Dict $kv.Value 'thread_ts') -eq $ThreadTs -or @(Get-Dict $kv.Value 'old_threads' @()) -contains $ThreadTs) { return @{ host = $kv.Key; s = $kv.Value } }
     }
     return $null
 }
@@ -59,11 +59,31 @@ function Get-ParentText($S, [string]$Status) {
     return "$head`n$($StatusText[$Status]) · $(Get-Date -Format 'HH:mm')"
 }
 
+function Get-LatestTopTs {
+    $h = Invoke-SlackApi 'conversations.history' @{ channel = $script:State.dm; limit = '1' }
+    $m = @(Get-Dict $h 'messages' @())
+    if ($m.Count) { return [string](Get-Dict $m[0] 'ts') } else { return '' }
+}
+
 function Confirm-Thread($S) {
-    # 会话第一次发到 Slack 时建 thread 的开头消息
-    if (Get-Dict $S 'thread_ts') { return }
+    # 要往会话 thread 里发东西前调用：保证这个会话的 thread 在私信最下面。
+    # Slack 的 thread 不会因为有新回复而下移，所以不在最下面时就新开一个 thread，旧的标成“已移到下方”。
+    $old = [string](Get-Dict $S 'thread_ts' '')
+    if ($old) {
+        try { if ((Get-LatestTopTs) -eq $old) { return } } catch { return }
+        $st = Get-Dict $S 'status'
+        try {
+            Invoke-SlackApi 'chat.update' @{ channel = $script:State.dm; ts = $old; text = "$((Get-ParentText $S $st).Split("`n")[0])`n已移到下方" } | Out-Null
+            if ($st -and $StatusEmoji.ContainsKey($st)) { Set-SlackReaction $script:State.dm $old $StatusEmoji[$st] -Remove }
+        } catch { Write-Log 'listener' "标记旧 thread 失败：$($_.Exception.Message)" }
+        # 旧 thread 里回复仍然送到这个会话
+        $S['old_threads'] = @(@(Get-Dict $S 'old_threads' @()) + $old | Select-Object -Last 20)
+    }
     $r = Invoke-SlackApi 'chat.postMessage' @{ channel = $script:State.dm; text = (Get-ParentText $S 'stop') }
     $S['thread_ts'] = Get-Dict $r 'ts'
+    # 状态表情要重新加到新开头消息上
+    $S['status'] = $null
+    Save-State
 }
 
 function Set-SessionStatus($S, [string]$Status) {
@@ -402,7 +422,6 @@ function Invoke-SocketMessage([string]$Raw) {
 $dm = Invoke-SlackApi 'conversations.open' @{ users = $Owner }
 $script:State['dm'] = Get-Dict (Get-Dict $dm 'channel') 'id'
 Save-State
-Invoke-SlackApi 'chat.postMessage' @{ channel = $script:State.dm; text = "桥接已启动（$(Get-Date -Format 'MM-dd HH:mm')）" } | Out-Null
 Write-Log 'listener' '启动'
 
 $backoff = 2
