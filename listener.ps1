@@ -98,12 +98,7 @@ function Invoke-SpoolEvents {
                     Set-SessionStatus $s $ev.kind
                 }
             }
-            { $_ -in 'ask', 'perm' } {
-                $reqFile = Join-Path $script:PendingDir "$($ev.request_id).json"
-                if (Test-Path $reqFile) {
-                    $script:Pending[$ev.request_id] = @{ req = (ConvertFrom-JsonDict (Read-TextFile $reqFile)); ts = $null; sel = @{}; host = $ev.host_id }
-                }
-            }
+            # ask / perm 由 Update-Pending 从 pending 目录接手，这里只更新会话信息
         }
     }
 }
@@ -160,7 +155,19 @@ function Close-PendingMessage($P, [string]$Text) {
 
 function Test-ProcessAlive([int]$ProcessId) { return [bool](Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) }
 
+function Sync-PendingFiles {
+    # 以 pending 目录为准：监听重启后，正在等的问题也能重新接上
+    foreach ($f in @(Get-ChildItem $script:PendingDir -Filter '*.json' | Where-Object { $_.Name -notlike 'inject-*' })) {
+        $id = $f.BaseName
+        if ($script:Pending.ContainsKey($id) -or (Test-Path (Join-Path $script:PendingDir "$id.closed"))) { continue }
+        try { $req = ConvertFrom-JsonDict (Read-TextFile $f.FullName) } catch { continue }
+        $script:Pending[$id] = @{ req = $req; ts = $null; sel = @{}; host = (Get-Dict $req 'host_id') }
+        Write-Log 'listener' "待答问题 $id（$(Get-Dict $req 'kind')）"
+    }
+}
+
 function Update-Pending {
+    Sync-PendingFiles
     foreach ($id in @($script:Pending.Keys)) {
         $p = $script:Pending[$id]
         $base = Join-Path $script:PendingDir $id
@@ -182,6 +189,7 @@ function Update-Pending {
             $blocks = if ($p.req.kind -eq 'ask') { Get-AskBlocks $p } else { Get-PermBlocks $p }
             $r = Invoke-SlackApi 'chat.postMessage' @{ channel = $script:State.dm; thread_ts = $s.thread_ts; text = $StatusText[$p.req.kind]; blocks = $blocks }
             $p.ts = Get-Dict $r 'ts'
+            Write-Log 'listener' "已发选择消息 $id"
             Set-SessionStatus $s $p.req.kind
         }
     }
