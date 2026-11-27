@@ -13,6 +13,8 @@ Windows only. Pure Windows PowerShell 5.1 and .NET Framework, no dependencies to
 
 > Personal project. Not affiliated with Anthropic or Slack.
 
+<p align="center"><img src="docs/screenshot.jpg" alt="A session thread in a Slack DM: recent messages, Claude's reply and a question with answer buttons" width="640"></p>
+
 ## Features
 
 - **Auto relay when you're away**: after a period with no keyboard/mouse input (5 minutes by default), session stops, questions and permission requests go to your Slack DM, one thread per session.

@@ -13,6 +13,8 @@
 
 > 这是个人项目，不是 Anthropic 或 Slack 的官方产品。
 
+<p align="center"><img src="docs/screenshot.jpg" alt="Slack 私信里的一个会话 thread：最近的对话、Claude 的回复和一道带按钮的选择题" width="640"></p>
+
 ## 能做什么
 
 - **离开电脑时自动发**：一段时间没有键盘鼠标操作（默认 5 分钟），会话停下、选择题、授权请求会发到 Slack 私信，每个会话一个 thread。
