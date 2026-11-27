@@ -21,8 +21,37 @@ function ConvertFrom-JsonDict([string]$Text) {
     return $script:Json.DeserializeObject($Text)
 }
 
+function ConvertTo-PlainValue($Value) {
+    # PowerShell 会把函数返回值包成 PSObject，JavaScriptSerializer 序列化它会报循环引用，先拆包
+    # 注意：`-is [psobject]` 对任何对象都为真，不能用来判断；一律取 .PSObject.BaseObject
+    if ($null -eq $Value) { return $null }
+    $Value = $Value.PSObject.BaseObject
+    if ($Value -is [string] -or $Value -is [ValueType]) { return $Value }
+    if ($Value -is [System.Collections.IDictionary]) {
+        $d = New-Object 'System.Collections.Generic.Dictionary[string,object]'
+        foreach ($k in @($Value.Keys)) {
+            $v = ConvertTo-PlainValue $Value[$k]
+            # 函数返回值存进 object 槽时会被重新包一层，存之前再拆一次
+            $raw = $null; if ($null -ne $v) { $raw = $v.PSObject.BaseObject }
+            # 不要用 $( ) 包，它会把单元素数组拆成标量
+            $d.Add([string]$k, $raw)
+        }
+        return , $d
+    }
+    if ($Value -is [System.Collections.IEnumerable]) {
+        $list = New-Object 'System.Collections.Generic.List[object]'
+        foreach ($item in $Value) {
+            $v = ConvertTo-PlainValue $item
+            $raw = $null; if ($null -ne $v) { $raw = $v.PSObject.BaseObject }
+            $list.Add($raw)
+        }
+        return , $list.ToArray()
+    }
+    return $Value
+}
+
 function ConvertTo-JsonText($Value) {
-    return $script:Json.Serialize($Value)
+    return $script:Json.Serialize((ConvertTo-PlainValue $Value))
 }
 
 function Read-TextFile([string]$Path) {
@@ -57,6 +86,11 @@ function Read-BridgeEnv {
         if ($t -eq '' -or $t.StartsWith('#') -or -not $t.Contains('=')) { continue }
         $i = $t.IndexOf('=')
         $cfg[$t.Substring(0, $i).Trim()] = $t.Substring($i + 1).Trim()
+    }
+    # 测试用：环境变量 BRIDGE_AWAY_AFTER_SECONDS 等可临时覆盖 .env 里的阈值
+    foreach ($k in @('AWAY_AFTER_SECONDS', 'INJECT_IDLE_SECONDS')) {
+        $override = [Environment]::GetEnvironmentVariable("BRIDGE_$k")
+        if ($override) { $cfg[$k] = $override }
     }
     foreach ($k in @('SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN', 'OWNER_USER_ID')) {
         if (-not $cfg[$k]) { throw ".env 缺少 $k" }

@@ -1,12 +1,22 @@
 ﻿# Slack Web API 和 Socket Mode
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
+# 这些读取类方法不接受 JSON 请求体，要用表单编码
+$script:FormMethods = @('chat.getPermalink', 'conversations.info', 'conversations.history', 'conversations.replies')
+
 function Invoke-SlackApi([string]$Method, [hashtable]$Body = @{}, [string]$Token = $script:Cfg.SLACK_BOT_TOKEN) {
-    $bytes = $script:Utf8.GetBytes((ConvertTo-JsonText $Body))
+    if ($script:FormMethods -contains $Method) {
+        $pairs = foreach ($k in $Body.Keys) { '{0}={1}' -f [Uri]::EscapeDataString($k), [Uri]::EscapeDataString([string]$Body[$k]) }
+        $bytes = $script:Utf8.GetBytes(($pairs -join '&'))
+        $contentType = 'application/x-www-form-urlencoded'
+    } else {
+        $bytes = $script:Utf8.GetBytes((ConvertTo-JsonText $Body))
+        $contentType = 'application/json; charset=utf-8'
+    }
     for ($attempt = 1; $attempt -le 3; $attempt++) {
         try {
             $resp = Invoke-WebRequest -UseBasicParsing -Method Post -Uri "https://slack.com/api/$Method" `
-                -Headers @{ Authorization = "Bearer $Token" } -ContentType 'application/json; charset=utf-8' -Body $bytes
+                -Headers @{ Authorization = "Bearer $Token" } -ContentType $contentType -Body $bytes
         } catch {
             $r = $_.Exception.Response
             if ($r -and [int]$r.StatusCode -eq 429) {
