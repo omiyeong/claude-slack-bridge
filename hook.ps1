@@ -2,16 +2,20 @@
 #   stop          Stop hook：一轮结束
 #   permission    PermissionRequest hook：选择题或授权，阻塞等 Slack 里的答案
 #   notification  Notification hook：会话在等输入（兜底）
-param([Parameter(Mandatory)] [ValidateSet('stop', 'permission', 'notification')] [string]$Mode)
+#   prompt        UserPromptSubmit hook：拦下 /slack，把会话发到 Slack 并开始跟随
+param([Parameter(Mandatory)] [ValidateSet('stop', 'permission', 'notification', 'prompt')] [string]$Mode)
 $ErrorActionPreference = 'Stop'
+
+# 只管桌面应用的会话；cc-connect、终端里的会话直接跳过
+if ($env:CLAUDE_CODE_ENTRYPOINT -ne 'claude-desktop' -or -not $env:CLAUDE_CODE_HOST_SESSION_ID) { exit 0 }
+$RawInput = (New-Object System.IO.StreamReader ([Console]::OpenStandardInput(), (New-Object System.Text.UTF8Encoding $false))).ReadToEnd()
+# 每条提示词都会跑这个 hook：不是 /slack 就在加载公共库（要编译 C#）之前退出，不拖慢输入
+$SlackCommand = '"prompt"\s*:\s*"\s*/slack\s*"'
+if ($Mode -eq 'prompt' -and $RawInput -notmatch $SlackCommand) { exit 0 }
+
 . (Join-Path $PSScriptRoot 'lib\common.ps1')
 
 $WaitSeconds = 540   # settings.json 里 PermissionRequest hook 的 timeout 要大于它
-
-function Read-HookInput {
-    $reader = New-Object System.IO.StreamReader ([Console]::OpenStandardInput(), $script:Utf8)
-    return ConvertFrom-JsonDict $reader.ReadToEnd()
-}
 
 function Write-HookOutput($Value) {
     $bytes = $script:Utf8.GetBytes((ConvertTo-JsonText $Value))
@@ -123,14 +127,22 @@ function Invoke-Notification($Hook) {
     New-SpoolEvent $ev
 }
 
+function Invoke-Prompt($Hook) {
+    if ([string](Get-Dict $Hook 'prompt' '') -notmatch '^\s*/slack\s*$') { return }
+    $ev = Get-BaseEvent $Hook
+    $ev.kind = 'follow'
+    New-SpoolEvent $ev
+    # 拦下这条提示词，不发给模型
+    Write-HookOutput @{ decision = 'block'; reason = '已发到 Slack，之后这个会话停下都会发过去' }
+}
+
 try {
-    # 只管桌面应用的会话；cc-connect、终端里的会话直接跳过
-    if ($env:CLAUDE_CODE_ENTRYPOINT -ne 'claude-desktop' -or -not $env:CLAUDE_CODE_HOST_SESSION_ID) { exit 0 }
-    $hook = Read-HookInput
+    $hook = ConvertFrom-JsonDict $RawInput
     switch ($Mode) {
         'stop' { Invoke-Stop $hook }
         'permission' { Invoke-Permission $hook }
         'notification' { Invoke-Notification $hook }
+        'prompt' { Invoke-Prompt $hook }
     }
 } catch {
     Write-Log 'hook' "$Mode 出错：$($_.Exception.Message)"

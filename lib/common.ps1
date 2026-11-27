@@ -164,6 +164,24 @@ function Get-TranscriptInfo([string]$Path) {
     return @{ text = $text; title = $title }
 }
 
+function Get-RecentMessages([string]$Path, [int]$Count) {
+    # 最近几条对话：用户消息各算一条，一轮里 Claude 被工具调用隔开的几段文字合成一条
+    $msgs = New-Object 'System.Collections.Generic.List[object]'
+    foreach ($line in (Get-TranscriptLines $Path)) {
+        if (-not $line.StartsWith('{') -or -not ($line.Contains('"type":"user"') -or $line.Contains('"type":"assistant"'))) { continue }
+        try { $d = ConvertFrom-JsonDict $line } catch { continue }
+        $role = Get-Dict $d 'type'
+        if ($role -notin 'user', 'assistant' -or (Get-Dict $d 'isMeta' $false) -or (Get-Dict $d 'isSidechain' $false)) { continue }
+        # 工具结果没有文字；命令输出、系统提醒这类用户侧记录不是你写的
+        $text = (Get-MessageText $d).Trim()
+        if (-not $text -or ($role -eq 'user' -and $text -match '^(<(command-|local-command|system-reminder|task-notification|bash-)|/slack\s*$)')) { continue }
+        $last = if ($msgs.Count) { $msgs[$msgs.Count - 1] } else { $null }
+        if ($last -and $role -eq 'assistant' -and $last.role -eq 'assistant') { $last.text = "$($last.text)`n`n$text" }
+        else { $msgs.Add(@{ role = $role; text = $text }) }
+    }
+    return @($msgs | Select-Object -Last $Count)
+}
+
 function Test-UserMessageArrived([string]$Path, [string]$Needle, [long]$SinceBytes) {
     # 打字后确认：transcript 在 SinceBytes 之后出现了一条包含回复原文的用户消息
     if (-not (Test-Path -LiteralPath $Path)) { return $false }

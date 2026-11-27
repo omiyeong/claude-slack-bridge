@@ -33,7 +33,25 @@ $script:SeenEvents = New-Object System.Collections.Generic.List[string]
 
 function Test-Away { return (Get-IdleSeconds) -ge $AwayAfter }
 
-function Get-Project([string]$Cwd) { if ($Cwd) { return Split-Path $Cwd -Leaf } else { return '~' } }
+# 发过 /slack 的会话一直跟随：人在电脑前也发
+function Test-ShouldPost($S) { return [bool](Get-Dict $S 'follow' $false) -or (Test-Away) }
+
+function Get-Project([string]$Cwd) {
+    # 没选文件夹的会话在临时工作区里，不算项目；worktree 算它所在的仓库
+    if (-not $Cwd -or $Cwd -match '[\\/]scratch-workspaces[\\/]') { return '' }
+    $m = [regex]::Match($Cwd, '^(.+?)[\\/](?:\.claude[\\/]worktrees|\.worktrees)[\\/]')
+    if ($m.Success) { $Cwd = $m.Groups[1].Value }
+    return Split-Path $Cwd -Leaf
+}
+
+function Get-SessionName($S) {
+    $name = Get-Project (Get-Dict $S 'cwd')
+    $title = Get-Dict $S 'title' ''
+    if ($name -and $title) { return "$name.$title" }
+    if ($title) { return $title }
+    if ($name) { return $name }
+    return '未命名会话'
+}
 
 function Get-SessionByThread([string]$ThreadTs) {
     foreach ($kv in $script:State.sessions.GetEnumerator()) {
@@ -54,10 +72,7 @@ function Update-SessionInfo($Ev) {
 }
 
 function Get-ParentText($S, [string]$Status) {
-    $name = Get-Project (Get-Dict $S 'cwd')
-    $title = Get-Dict $S 'title' ''
-    $head = if ($title) { "*$name · $title*" } else { "*$name*" }
-    return "$head`n$($StatusText[$Status]) · $(Get-Date -Format 'HH:mm')"
+    return "*$(Get-SessionName $S)*`n$($StatusText[$Status]) · $(Get-Date -Format 'HH:mm')"
 }
 
 function Get-LatestTopTs {
@@ -66,12 +81,13 @@ function Get-LatestTopTs {
     if ($m.Count) { return [string](Get-Dict $m[0] 'ts') } else { return '' }
 }
 
-function Confirm-Thread($S) {
+function Confirm-Thread($S, [switch]$New) {
     # 要往会话 thread 里发东西前调用：保证这个会话的 thread 在私信最下面。
     # Slack 的 thread 不会因为有新回复而下移，所以不在最下面时就新开一个 thread，旧的标成“已移到下方”。
+    # -New：不管在不在最下面都新开
     $old = [string](Get-Dict $S 'thread_ts' '')
     if ($old) {
-        try { if ((Get-LatestTopTs) -eq $old) { return } } catch { return }
+        if (-not $New) { try { if ((Get-LatestTopTs) -eq $old) { return } } catch { return } }
         $st = Get-Dict $S 'status'
         try {
             Invoke-SlackApi 'chat.update' @{ channel = $script:State.dm; ts = $old; text = "$((Get-ParentText $S $st).Split("`n")[0])`n已移到下方" } | Out-Null
@@ -120,7 +136,7 @@ function Invoke-SpoolEvents {
             { $_ -in 'stop', 'notify' } {
                 # Notification 只是兜底：已经在等选择/授权，或刚推过“已停下”时不再重复
                 if ($ev.kind -eq 'notify' -and ((Test-OpenQuestion $ev.host_id) -or (Get-Dict $s 'status') -eq 'stop')) { Save-State; break }
-                if (Test-Away) {
+                if (Test-ShouldPost $s) {
                     Confirm-Thread $s
                     $body = Get-Dict $ev 'body' ''
                     if ($ev.kind -eq 'notify' -and -not $body) { $body = '会话在等你输入' }
@@ -130,9 +146,24 @@ function Invoke-SpoolEvents {
                     Set-SessionStatus $s $ev.kind
                 }
             }
+            'follow' { Send-Follow $s }
             # ask / perm 由 Update-Pending 从 pending 目录接手，这里只更新会话信息
         }
     }
+}
+
+function Send-Follow($S) {
+    # /slack：新开 thread，发最近 5 条消息，之后这个会话停下都发
+    $S['follow'] = $true
+    Confirm-Thread $S -New
+    $recent = @(Get-RecentMessages (Get-Dict $S 'transcript' '') 5)
+    if (-not $recent.Count) { Send-Thread $S '（还没有消息）' }
+    foreach ($m in $recent) {
+        $who = if ($m.role -eq 'user') { '你' } else { 'Claude' }
+        Send-Thread $S "**$who**`n`n$($m.text)"
+    }
+    Set-SessionStatus $S 'stop'
+    Write-Log 'listener' "跟随会话 $(Get-SessionName $S)"
 }
 
 # ---------- 选择题和授权 ----------
@@ -255,8 +286,8 @@ function Update-Pending {
             $script:Pending.Remove($id)
             continue
         }
-        if (-not $p.ts -and (Test-Away)) {
-            # 人不在电脑前才发到 Slack；在的话就在电脑上答
+        if (-not $p.ts -and (Test-ShouldPost $s)) {
+            # 人不在电脑前或会话在跟随才发到 Slack；否则就在电脑上答
             Confirm-Thread $s
             $blocks = if ($p.req.kind -eq 'ask') { Get-AskBlocks $p } else { Get-PermBlocks $p }
             $r = Invoke-SlackApi 'chat.postMessage' @{ channel = $script:State.dm; thread_ts = $s.thread_ts; text = $StatusText[$p.req.kind]; blocks = $blocks }
@@ -403,7 +434,7 @@ function Send-SessionList {
         $transcript = [string](Get-Dict $s 'transcript' '')
         if (-not $transcript -or -not (Test-Path -LiteralPath $transcript)) { continue }
         $link = Get-Dict (Invoke-SlackApi 'chat.getPermalink' @{ channel = $script:State.dm; message_ts = $s.thread_ts }) 'permalink'
-        $lines += "• <$link|$(Get-Project (Get-Dict $s 'cwd')) · $(Get-Dict $s 'title' '')>  $($StatusText[$st])"
+        $lines += "• <$link|$(Get-SessionName $s)>  $($StatusText[$st])"
     }
     $text = if ($lines.Count) { $lines -join "`n" } else { '没有在等你的会话' }
     Invoke-SlackApi 'chat.postMessage' @{ channel = $script:State.dm; text = $text; unfurl_links = $false; unfurl_media = $false } | Out-Null

@@ -16,11 +16,18 @@ if ($RegisterTask) {
     Write-Output '已注册计划任务 claude-slack-bridge（登录时启动）'
 }
 
+# /slack 命令文件：让输入框能补全它；真正的处理在 UserPromptSubmit hook
+$commandsDir = Join-Path $env:USERPROFILE '.claude\commands'
+if (-not (Test-Path $commandsDir)) { New-Item -ItemType Directory -Path $commandsDir | Out-Null }
+Copy-Item (Join-Path $root 'commands\slack.md') (Join-Path $commandsDir 'slack.md') -Force
+Write-Output "已安装 /slack 命令到 $commandsDir"
+
 $cmd = { param($mode) "powershell -NoProfile -ExecutionPolicy Bypass -File `"$hook`" $mode" }
 $snippet = [ordered]@{
     Stop              = @(@{ hooks = @(@{ type = 'command'; command = (& $cmd 'stop') }) })
     PermissionRequest = @(@{ hooks = @(@{ type = 'command'; command = (& $cmd 'permission'); timeout = 600 }) })
     Notification      = @(@{ hooks = @(@{ type = 'command'; command = (& $cmd 'notification') }) })
+    UserPromptSubmit  = @(@{ hooks = @(@{ type = 'command'; command = (& $cmd 'prompt') }) })
 }
-Write-Output '把下面三项合并进 ~/.claude/settings.json 的 "hooks"（保留已有条目）：'
+Write-Output '把下面四项合并进 ~/.claude/settings.json 的 "hooks"（保留已有条目）：'
 Write-Output ($snippet | ConvertTo-Json -Depth 10)
